@@ -1,0 +1,185 @@
+---
+title: "Visualizing US Air Transport"
+output: html_notebook
+---
+```{r}
+setwd('~/Projects/edav/R')
+library('ggplot2')
+library('maps')
+library('rgeos')
+library('maptools')
+library('ggmap')
+library('geosphere')
+library('plyr')
+library('plotly')
+```
+
+
+```{r}
+#Prepare MASTERu DATA
+
+
+flightData=read.csv('../Data/T100_MARKET_ALL_CARRIER.csv')
+str(flightData)
+
+flightDataAgg <- flightData %>% group_by(ORIGIN_AIRPORT_ID, DEST_AIRPORT_ID) %>% mutate(PASSENGERS_t=sum(PASSENGERS), FREIGHT_t=sum(FREIGHT), MAIL_t=sum(MAIL))
+
+flightDataFINAL=flightDataAgg[!duplicated(flightDataAgg[,c(14, 25)]),]
+flightDataFINAL=flightDataFINAL[, c(9,14,17, 18, 19, 20, 21, 22, 23, 24, 25, 28, 29, 30, 31, 32, 33, 34, 35, 39,43, 44, 45)]
+
+
+masterCoord=read.csv('../Data/59836722_T_MASTER_CORD.csv')
+# str(masterCoord)
+airUS=masterCoord[masterCoord$AIRPORT_COUNTRY_CODE_ISO=='US',]
+airUS=airUS[!duplicated(airUS$AIRPORT_ID),]
+rm(masterCoord)
+airUS=airUS[,c(2,22,27, 5)]
+masterFlight=merge(flightDataFINAL, airUS, by.x='ORIGIN_AIRPORT_ID', by.y='AIRPORT_ID', all.x = FALSE, all.y = FALSE)
+masterFlight=merge(masterFlight, airUS, by.x='DEST_AIRPORT_ID', by.y='AIRPORT_ID', all.x = FALSE, all.y = FALSE)
+
+#List of unique airports
+oAirports=unique(masterFlight$DISPLAY_AIRPORT_CITY_NAME_FULL.x)
+dAirports=unique(masterFlight$DISPLAY_AIRPORT_CITY_NAME_FULL.y)
+uniAirports=union(oAirports, dAirports)
+
+easAirports=read.csv("../Data/eas.csv")
+xAirports=data.frame()
+for(i in 1:nrow(easAirports)){
+  ind=grep(paste(easAirports$EAS.Community[i],'.*', easAirports$State[i], sep=""), uniAirports, ignore.case = TRUE)
+  if(length(ind)>0){
+    # print("lalal")
+    # xAirports=c(xAirports, uniAirports[ind])
+    blah.tmp=data.frame(uniAirports[ind], easAirports$Docket[i])
+    names(blah.tmp) <- names(xAirports)
+    xAirports=rbind(xAirports, blah.tmp)
+  }
+}
+
+xAirports=data.frame(xAirports)
+xAirports$flag=TRUE
+colnames(xAirports) <- c("xAirports","Docket", "flag")
+
+masterFlight=merge(masterFlight, xAirports, by.x='DISPLAY_AIRPORT_CITY_NAME_FULL.x', by.y='xAirports', all.x = TRUE, all.y = FALSE)
+masterFlight=merge(masterFlight, xAirports, by.x='DISPLAY_AIRPORT_CITY_NAME_FULL.y', by.y='xAirports', all.x = TRUE, all.y = FALSE)
+
+masterFlight=masterFlight[masterFlight$ORIGIN_COUNTRY=='US',]
+masterFlight=masterFlight[masterFlight$DEST_COUNTRY=='US',]
+write.csv(masterFlight, file = "../Data/masterFlight.csv")
+
+
+```
+
+```{r}
+
+#Plotting the flight paths as great circles
+
+xlim <- c(-171.738281, -56.601563)
+ylim <- c(20, 71.856229)
+
+usmap=map("world", col="#353535", fill=TRUE, bg="black", lwd=0.05, xlim=xlim, ylim=ylim)
+
+pal <- colorRampPalette(c("#edf8b1", "#2c7fb8"))
+colors <- pal(100)
+maxcnt <- max(masterFlight$PASSENGERS_t)
+masterFlight[is.na(masterFlight$flag.x),]$flag.x=FALSE
+masterFlight[is.na(masterFlight$flag.y),]$flag.y=FALSE
+masterFlight$flag=masterFlight$flag.x | masterFlight$flag.y
+
+blah=gcIntermediate(masterFlight[, c('LONGITUDE.x', 'LATITUDE.x')], masterFlight[,c('LONGITUDE.y', 'LATITUDE.y')], n=100, addStartEnd=TRUE, sp=TRUE)
+fortifiedroutes = fortify.SpatialLinesDataFrame(blah)
+masterFlight$id=as.character(c(1:nrow(masterFlight))) 
+greatcircles = merge(fortifiedroutes, masterFlight, all.x=T, by="id") 
+greatcircles$passProp=greatcircles$PASSENGERS_t/maxcnt
+
+greatcircles=greatcircles[greatcircles$long<0,]
+greatcircles=greatcircles[greatcircles$lon>-170,]
+greatcircles=greatcircles[greatcircles$lat>0,]
+
+blahNorm=greatcircles[!greatcircles$flag,]
+blahEas=greatcircles[greatcircles$flag,]
+
+
+
+plot=ggplot() + geom_polygon(aes(long,lat,group=group), size = 0.1, colour= "#090D2A", fill="#e2e2e2", alpha=0.8, data=usmap) + geom_path(data = blahNorm, aes(long, lat , group = group, alpha=passProp), size=0.1, color='#0CA0D8') + geom_path(data = blahEas, aes(long, lat , group = group, alpha=passProp), size=0.15, color='#B20009') +
+theme(panel.background = element_rect(fill = 'black'), panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  guides(color=FALSE) + guides(alpha=FALSE)
+
+plot
+
+ggsave(filename = '../Output/flightPaths.png', plot = plot, dpi=600, width = 10, height= 8)
+```
+
+
+```{r}
+# ROUGH - sub-optimal approach
+
+# blah=data.frame()
+# for (i in 1:nrow(masterFlight)) {
+#     inter <- gcIntermediate(c(masterFlight[i,]$LONGITUDE.x, masterFlight[i,]$LATITUDE.x), c(masterFlight[i,]$LONGITUDE.y, masterFlight[i,]$LATITUDE.y), n=100, addStartEnd=TRUE)
+#     blah.tmp=data.frame(inter)
+#     blah.tmp$grp=i
+#     # colindex <- round( (masterFlight[i,]$PASSENGERS_t/ maxcnt) * length(colors) )
+#     blah.tmp$passengers=masterFlight[i,]$PASSENGERS_t
+#     blah.tmp$passProp=blah.tmp$passengers/maxcnt
+#     blah.tmp$flag=masterFlight[i,]$flag
+#     
+#     # print(masterFlight[i,]$LONGITUDE.x)
+#     # print(masterFlight[i,]$LATITUDE.x)
+#     names(blah.tmp) <- names(blah)
+#     blah=rbind(blah, blah.tmp)
+#              
+#     # lines(inter, col=colors[colindex], lwd=0.2)
+#     # b=c(geom_line(aes(inter),alpha=0.3))
+#     if(i%%1000==0){print(i)}
+# }
+# colnames(blah) <- c('lon', 'lat', 'group', 'passengers', 'passProp', 'flag')
+# 
+# blahNew=blah[blah$lon<0,]
+# blahNew=blahNew[blahNew$lon>-170,]
+# blahNew=blahNew[blahNew$lat>0,]
+# # blahNew[is.na(blahNew$flag),]$flag=FALSE
+# 
+# blahNorm=blahNew[!blahNew$flag,]
+# blahEas=blahNew[blahNew$flag,]
+# 
+# 
+# save(blah, file='../Data/blah.Rda')
+# save(blahNew, file='../Data/finalPlotData.Rda')
+# 
+# plot=ggplot() + geom_polygon(aes(long,lat,group=group), size = 0.1, colour= "#090D2A", fill="#e2e2e2", alpha=0.8, data=usmap) + geom_path(data = blahNorm, aes(lon, lat , group = group, alpha=passProp), size=0.1, color='#0CA0D8') + geom_path(data = blahEas, aes(lon, lat , group = group, alpha=passProp), size=0.15, color='#B20009') +
+# theme(panel.background = element_rect(fill = 'black'), panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+#   guides(color=FALSE) + guides(alpha=FALSE)
+# 
+# plot
+```
+
+
+
+
+```{r}
+#Prepare Data for Carto
+
+# blankDF=data.frame()
+easAirports$airportName=""
+for(i in 1:nrow(easAirports)){
+  ind=grep(paste(easAirports$EAS.Community[i],'.*', easAirports$State[i], sep=""), airUS$DISPLAY_AIRPORT_CITY_NAME_FULL, ignore.case = TRUE)[1]
+  if(length(ind)>0){
+    # print(as.character(airUS$DISPLAY_AIRPORT_CITY_NAME_FULL[ind]))
+    easAirports$airportName[i]=as.character(airUS$DISPLAY_AIRPORT_CITY_NAME_FULL[ind])
+    # blah.tmp=data.frame(masterCoord$DISPLAY_AIRPORT_CITY_NAME_FULL[ind], easAirports$Docket[i])
+    # names(blah.tmp) <- names(xAirports)
+    # xAirports=rbind(xAirports, blah.tmp)
+  }
+}
+easCarto=merge(easAirports, airUS, by.x='airportName', by.y='DISPLAY_AIRPORT_CITY_NAME_FULL', all=FALSE)
+easCarto=easCarto[!duplicated(easCarto$Docket),]
+
+write.csv(easCarto, file="../Data/CartoFinal.csv")
+
+
+```
+
+
+
+
+
