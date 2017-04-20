@@ -1,1 +1,4 @@
-Examining the Impact of Transportation Budget Cuts in US
+Visualizing the Impact of transportation budget cuts on US Air Transport.
+
+-Visualize affected flight paths
+-Visualize EAS communities and impacted flight services.
